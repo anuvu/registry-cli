@@ -54,16 +54,11 @@ class Requests:
 
     def bearer_request(self, method, url, auth, **kwargs):
         global DEBUG
-        if DEBUG: print("[debug][funcname]: bearer_request()")
 
         if DEBUG:
-            print('[debug][registry][request]: {0} {1}'.format(method, url))
-            if 'Authorization' in kwargs['headers']:
-                print('[debug][registry][request]: Authorization header:')
-
-                token_parsed = kwargs['headers']['Authorization'].split('.')
-                pprint.pprint(ast.literal_eval(decode_base64(token_parsed[0])))
-                pprint.pprint(ast.literal_eval(decode_base64(token_parsed[1])))
+            print("[debug][funcname]: bearer_request()")
+            print('[debug][registry][request]: method url: {0} {1}'.format(method, url))
+            print('[debug][registry][request]: headers: {0}'.format(kwargs['headers']))
 
         res = requests.request(method, url, **kwargs)
         if str(res.status_code)[0] == '2':
@@ -91,9 +86,9 @@ class Requests:
                 print('[debug][auth][request] Refreshing auth token: {0} {1}'.format(method, request_url))
 
             if args.auth_method == 'GET':
-                try_oauth = requests.get(request_url, auth=auth, **kwargs)
+                try_oauth = requests.get(request_url, auth=auth, headers={'Accept': 'application/json'})
             else:
-                try_oauth = requests.post(request_url, auth=auth, **kwargs)
+                try_oauth = requests.post(request_url, auth=auth, headers={'Accept': 'application/json'})
 
             try:
                 oauth_response = ast.literal_eval(try_oauth._content.decode('utf-8'))
@@ -105,17 +100,35 @@ class Requests:
                 sys.exit(1)
 
             if DEBUG:
-                print('[debug][auth] token issued: ')
-                token_parsed=token.split('.')
-                pprint.pprint(ast.literal_eval(decode_base64(token_parsed[0])))
-                pprint.pprint(ast.literal_eval(decode_base64(token_parsed[1])))
+                print('[debug][auth] token issued: {0}'.format(token))
 
             kwargs['headers']['Authorization'] = 'Bearer {0}'.format(token)
         else:
             return (res, kwargs['headers']['Authorization'])
 
         res = requests.request(method, url, **kwargs)
-        return (res, kwargs['headers']['Authorization'])
+        if str(res.status_code)[0] == '2':
+            if DEBUG: print("[debug][registry] accepted")
+            return (res, kwargs['headers']['Authorization'])
+
+        if res.status_code == 406:
+            # Try with JSon header
+            old_accept_header = kwargs["headers"]["Accept"]
+            kwargs["headers"]["Accept"] = "application/json"
+            res = requests.request(method, url, **kwargs)
+            kwargs["headers"]["Accept"] = old_accept_header
+            if str(res.status_code)[0] == '2':
+                if DEBUG: print("[debug][registry] accepted")
+                return (res, kwargs['headers']['Authorization'])
+
+        print('\n\n[ERROR] call failed')
+        print('[ERROR][request] url: {0}'.format(res.url))
+        print('[ERROR][request] headers: {0}'.format(res.request.headers))
+        print('[ERROR][request] body: {0}'.format(res.request.body))
+        print('[ERROR][response] status: {0}'.format(res.status_code))
+        print('[ERROR][response] headers: {0}'.format(res.headers))
+        print('[ERROR][response] content: {0}'.format(res.content))
+        sys.exit(1)
 
 
 def natural_keys(text):
