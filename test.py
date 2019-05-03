@@ -734,8 +734,8 @@ class TestKeepImagesLike(unittest.TestCase):
     # we need this because we want to call main_loop
     # which creates the Registry object by itself calling create
     @staticmethod
-    def mock_create(h, l, n, d="HEAD"):
-        r = Registry._create(h, l, n, d)
+    def mock_create(h, l, n, p, d="HEAD"):
+        r = Registry._create(h, l, n, p, d)
         r.http = MockRequests()
         r.list_images = MagicMock(return_value=['a', 'b', 'c'])
         return r
@@ -764,6 +764,7 @@ class TestArgParser(unittest.TestCase):
 
     def test_all_args(self):
         args_list = ["-r", "hostname",
+                     "-p", "directory",
                      "-l", "loginstring",
                      "-d",
                      "-n", "15",
@@ -792,6 +793,7 @@ class TestArgParser(unittest.TestCase):
         self.assertEqual(args.delete_by_hours, "24")
         self.assertEqual(args.keep_by_hours, "24")
         self.assertEqual(args.digest_method, "GET")
+        self.assertEqual(args.path, "directory")
 
     def test_default_args(self):
         args_list = ["-r", "hostname",

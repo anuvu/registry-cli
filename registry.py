@@ -191,6 +191,7 @@ class Registry:
         self.no_validate_ssl = False
         self.http = None
         self.last_error = None
+        self.base_path = ''
         self.digest_method = "HEAD"
 
     def parse_login(self, login):
@@ -208,9 +209,8 @@ class Registry:
 
         return (None, None)
 
-
     @staticmethod
-    def _create(host, login, no_validate_ssl, digest_method = "HEAD"):
+    def _create(host, login, no_validate_ssl, base_path='', digest_method="HEAD"):
         r = Registry()
 
         (r.username, r.password) = r.parse_login(login)
@@ -219,6 +219,7 @@ class Registry:
             sys.exit(1)
 
         r.hostname = host
+        r.base_path = base_path + '/'
         r.no_validate_ssl = no_validate_ssl
         r.http = Requests()
         r.digest_method = digest_method
@@ -227,7 +228,6 @@ class Registry:
     @staticmethod
     def create(*args, **kw):
         return Registry._create(*args, **kw)
-
 
     def send(self, path, method="GET"):
         if 'bearer' in self.auth_schemes:
@@ -258,14 +258,14 @@ class Registry:
         return None
 
     def list_images(self):
-        result = self.send('/v2/_catalog?n=10000')
+        result = self.send('/v2/{0}_catalog?n=10000'.format(self.base_path))
         if result is None:
             return []
 
         return json.loads(result.text)['repositories']
 
     def list_tags(self, image_name):
-        result = self.send("/v2/{0}/tags/list".format(image_name))
+        result = self.send("/v2/{0}{1}/tags/list".format(self.base_path, image_name))
         if result is None:
             return []
 
@@ -288,8 +288,8 @@ class Registry:
     #                 print("Adding {0} to tags list".format(tag))
 
     def get_tag_digest(self, image_name, tag):
-        image_headers = self.send("/v2/{0}/manifests/{1}".format(
-            image_name, tag), method=self.digest_method)
+        image_headers = self.send("/v2/{0}{1}/manifests/{2}".format(
+            self.base_path, image_name, tag), method=self.digest_method)
 
         if image_headers is None:
             print("  tag digest not found: {0}.".format(self.last_error))
@@ -315,8 +315,8 @@ class Registry:
         if tag_digest is None:
             return False
 
-        delete_result = self.send("/v2/{0}/manifests/{1}".format(
-            image_name, tag_digest), method="DELETE")
+        delete_result = self.send("/v2/{0}{1}/manifests/{2}".format(
+            self.base_path, image_name, tag_digest), method="DELETE")
 
         if delete_result is None:
             print("failed, error: {0}".format(self.last_error))
@@ -328,10 +328,9 @@ class Registry:
         print("done")
         return True
 
-
     def list_tag_layers(self, image_name, tag):
-        layers_result = self.send("/v2/{0}/manifests/{1}".format(
-            image_name, tag))
+        layers_result = self.send("/v2/{0}{1}/manifests/{2}".format(
+            self.base_path, image_name, tag))
 
         if layers_result is None:
             print("error {0}".format(self.last_error))
@@ -347,7 +346,7 @@ class Registry:
 
     def get_tag_config(self, image_name, tag):
         config_result = self.send(
-            "/v2/{0}/manifests/{1}".format(image_name, tag))
+            "/v2/{0}{1}/manifests/{2}".format(self.base_path, image_name, tag))
 
         if config_result is None:
             print("  tag digest not found: {0}".format(self.last_error))
@@ -365,18 +364,17 @@ class Registry:
     def get_image_age(self, image_name, image_config):
         container_header = {"Accept": "{0}".format(
             image_config['mediaType'])}
-
+        request_url = "{0}/v2/{1}{2}/blobs/{3}".format(
+            self.hostname, self.base_path, image_name, image_config['digest'])
         if 'bearer' in self.auth_schemes:
             container_header['Authorization'] = self.HEADERS['Authorization']
-            (response, self.HEADERS['Authorization']) = self.http.bearer_request("GET", "{0}{1}".format(self.hostname, "/v2/{0}/blobs/{1}".format(
-                image_name, image_config['digest'])),
+            (response, self.HEADERS['Authorization']) = self.http.bearer_request("GET", request_url,
                 auth=(('', '') if self.username in ["", None]
                     else (self.username, self.password)),
                 headers=container_header,
                 verify=not self.no_validate_ssl)
         else:
-            response = self.http.request("GET", "{0}{1}".format(self.hostname, "/v2/{0}/blobs/{1}".format(
-                image_name, image_config['digest'])),
+            response = self.http.request("GET", request_url,
                 headers=container_header,
                 auth=(None if self.username == ""
                     else (self.username, self.password)),
@@ -433,6 +431,13 @@ for more detail on garbage collection read here:
         help="Hostname for registry server, e.g. https://example.com:5000",
         required=True,
         metavar="URL")
+
+    parser.add_argument(
+        '-p', '--path',
+        help="Path to registry on the server, needed for Artifactory-based repos, "
+             "e.g. 'dir' in https://example.com:5000/dir",
+        required=False,
+        default='')
 
     parser.add_argument(
         '-d', '--delete',
@@ -723,9 +728,11 @@ def main_loop(args):
         args.login = username + ':' + password
 
     registry = Registry.create(args.host, args.login, args.no_validate_ssl,
-                               args.digest_method)
-
-    registry.auth_schemes = get_auth_schemes(registry,'/v2/_catalog')
+                               args.path, args.digest_method)
+    catalog_path = "/v2/_catalog"
+    if args.path:
+        catalog_path = "/v2/{0}/_catalog".format(args.path)
+    registry.auth_schemes = get_auth_schemes(registry, catalog_path)
 
     if args.delete:
         print("Will delete all but {0} last tags".format(keep_last_versions))
