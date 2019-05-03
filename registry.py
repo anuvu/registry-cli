@@ -88,7 +88,7 @@ class Requests:
                 request_url += '{0}scope={1}'.format(query_separator, oauth['bearer']['scope'])
 
             if DEBUG:
-                print('[debug][auth][request] Refreshing auth token: POST {0}'.format(request_url))
+                print('[debug][auth][request] Refreshing auth token: {0} {1}'.format(method, request_url))
 
             if args.auth_method == 'GET':
                 try_oauth = requests.get(request_url, auth=auth, **kwargs)
@@ -97,6 +97,8 @@ class Requests:
 
             try:
                 oauth_response = ast.literal_eval(try_oauth._content.decode('utf-8'))
+                if DEBUG:
+                    print('[debug][auth][request] Response content: {0}'.format(oauth_response))
                 token = oauth_response['access_token'] if 'access_token' in oauth_response else oauth_response['token']
             except SyntaxError:
                 print('\n\n[ERROR] couldnt accure token: {0}'.format(try_oauth._content))
@@ -165,6 +167,10 @@ def get_auth_schemes(r,path):
     if DEBUG: print("[debug][funcname]: get_auth_schemes()")
 
     try_oauth = requests.head('{0}{1}'.format(r.hostname,path), verify=not r.no_validate_ssl)
+
+    if DEBUG:
+        print("[debug][funcname]: headers:")
+        print(try_oauth.headers)
 
     if 'Www-Authenticate' in try_oauth.headers:
         oauth = www_authenticate.parse(try_oauth.headers['Www-Authenticate'])
