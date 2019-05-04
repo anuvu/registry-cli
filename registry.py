@@ -320,6 +320,15 @@ class Registry:
         return tag_digest
 
     def delete_tag(self, image_name, tag, dry_run, tag_digests_to_ignore):
+
+        def delete(registry, name, manifest):
+            url = "/v2/{0}{1}/manifests/{2}".format(registry.base_path, name, manifest)
+            delete_result = registry.send(url, method="DELETE")
+            if delete_result is None:
+                print("delete failed on {0}, error: {1}".format(url, registry.last_error))
+                print(get_error_explanation("delete_tag", registry.last_error))
+            return delete_result
+
         if dry_run:
             print('would delete tag {0}'.format(tag))
             return False
@@ -334,13 +343,12 @@ class Registry:
         if tag_digest is None:
             return False
 
-        delete_result = self.send("/v2/{0}{1}/manifests/{2}".format(
-            self.base_path, image_name, tag_digest), method="DELETE")
-
-        if delete_result is None:
-            print("failed, error: {0}".format(self.last_error))
-            print(get_error_explanation("delete_tag", self.last_error))
-            return False
+        delete_result_digest = delete(self, image_name, tag_digest)
+        if not delete_result_digest:
+            # In some cases the tag itself is the name of the manifest
+            delete_result_tag = delete(self, image_name, tag)
+            if not delete_result_tag:
+                return False
 
         tag_digests_to_ignore.append(tag_digest)
 
