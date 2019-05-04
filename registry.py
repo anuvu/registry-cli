@@ -3,6 +3,7 @@
 import requests
 import ast
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
+import copy
 import json
 import pprint
 import base64
@@ -46,89 +47,128 @@ CONST_KEEP_LAST_VERSIONS = 10
 # print debug messages
 DEBUG = False
 
+
 # this class is created for testing
 class Requests:
 
-    def request(self, method, url, **kwargs):
-        return requests.request(method, url, **kwargs)
+    def __init__(self):
+        self._bearer_auth_token = None
+        self.auth_schemes = []
+        self.username = None
+        self.password = None
 
-    def bearer_request(self, method, url, auth, **kwargs):
+    def _refresh_bearer_auth_token(self, auth, headers):
         global DEBUG
+        oauth = www_authenticate.parse(headers['Www-Authenticate'])
+        auth_method = args.auth_method.upper()
 
         if DEBUG:
-            print("[debug][funcname]: bearer_request()")
-            print('[debug][registry][request]: method url: {0} {1}'.format(method, url))
-            print('[debug][registry][request]: headers: {0}'.format(kwargs['headers']))
+            print('[debug][auth][answer] Auth header:')
+            pprint.pprint(oauth['bearer'])
 
+        request_url = '{0}'.format(oauth['bearer']['realm'])
+        query_separator = '?'
+        if 'service' in oauth['bearer']:
+            request_url += '{0}service={1}'.format(query_separator, oauth['bearer']['service'])
+            query_separator = '&'
+        if 'scope' in oauth['bearer']:
+            request_url += '{0}scope={1}'.format(query_separator, oauth['bearer']['scope'])
+
+        if DEBUG:
+            print('[debug][auth][request] Refreshing auth token: {0} {1}'.format(auth_method, request_url))
+
+        if auth_method == 'GET':
+            try_oauth = self._request("get", request_url, auth=auth, headers={'Accept': 'application/json'})
+        else:
+            try_oauth = self._request("post", request_url, auth=auth, headers={'Accept': 'application/json'})
+
+        try:
+            oauth_response = ast.literal_eval(try_oauth._content.decode('utf-8'))
+            if DEBUG:
+                print('[debug][auth][request] Response content: {0}'.format(oauth_response))
+            token = oauth_response['access_token'] if 'access_token' in oauth_response else oauth_response['token']
+        except SyntaxError:
+            print('\n\n[ERROR] could not acquire token: {0}'.format(try_oauth._content))
+            sys.exit(1)
+
+        if DEBUG:
+            print('[debug][auth] token issued: {0}'.format(token))
+
+        self._bearer_auth_token = token
+
+    def init_auth_schemes(self, url, verify):
+        """ Updates list of auth schemes(lowcased) if www-authenticate: header exists
+             returns None if no header found
+             - www-authenticate: basic
+             - www-authenticate: bearer
+        """
+        if DEBUG:
+            print("[debug][funcname]: init_auth_schemes()")
+
+        try_oauth = requests.head(url, verify=verify)
+
+        if DEBUG:
+            print("[debug][funcname]: headers:")
+            print(try_oauth.headers)
+
+        if 'Www-Authenticate' in try_oauth.headers:
+            oauth = www_authenticate.parse(try_oauth.headers['Www-Authenticate'])
+            if DEBUG:
+                print('[debug][auth][registry] Auth schemes found:{0}'.format([m for m in oauth]))
+            self.auth_schemes = [m.lower() for m in oauth]
+        else:
+            if DEBUG:
+                print('[debug][auth][registry] No Auth schemes found')
+            self.auth_schemes = []
+
+    def request(self, method, url, **kwargs):
+        if 'bearer' in self.auth_schemes:
+            auth = (('', '') if self.username in ["", None] else (self.username, self.password))
+            res = self._bearer_request(method, url, auth=auth, **kwargs)
+        else:
+            auth = (None if self.username == "" else (self.username, self.password))
+            res = self._request(method, url, auth=auth, **kwargs)
+        return res
+
+    @staticmethod
+    def _request(method, url, **kwargs):
+        global DEBUG
         res = requests.request(method, url, **kwargs)
+        if DEBUG and str(res.status_code)[0] != '2':
+            msg = '\n\n[error][registry] Request failed'
+            msg += '\n[error][registry][request] method {0}: url: {1}'.format(method, res.url)
+            msg += '\n[error][registry][request] headers: {0}'.format(res.request.headers)
+            msg += '\n[error][registry][request] body: {0}'.format(res.request.body)
+            msg += '\n[error][registry][response] status: {0}'.format(res.status_code)
+            msg += '\n[error][registry][response] headers: {0}'.format(res.headers)
+            msg += '\n[error][registry][response] content: {0}'.format(res.content)
+            print(msg)
+        elif DEBUG:
+            print("[debug][registry] accepted")
+        return res
+
+    def _bearer_request(self, method, url, auth, **kwargs):
+        global DEBUG
+        local_kwargs = copy.deepcopy(kwargs)
+
+        if method.upper() == "DELETE":
+            local_kwargs["headers"].pop("Accept", None)
+
+        if self._bearer_auth_token:
+            local_kwargs['headers']['Authorization'] = 'Bearer {0}'.format(self._bearer_auth_token)
+
+        res = self._request(method, url, **local_kwargs)
         if str(res.status_code)[0] == '2':
-            if DEBUG: print("[debug][registry] accepted")
-            return (res, kwargs['headers']['Authorization'])
+            return res
 
         if res.status_code == 401:
-            if DEBUG: print("[debug][registry] Access denied. Refreshing token...")
-            oauth = www_authenticate.parse(res.headers['Www-Authenticate'])
-
-            if DEBUG:
-                print('[debug][auth][answer] Auth header:')
-                pprint.pprint(oauth['bearer'])
-
-            # print('[info] retreiving bearer token for {0}'.format(oauth['bearer']['scope']))
-            request_url = '{0}'.format(oauth['bearer']['realm'])
-            query_separator = '?'
-            if 'service' in oauth['bearer']:
-                request_url += '{0}service={1}'.format(query_separator, oauth['bearer']['service'])
-                query_separator = '&'
-            if 'scope' in oauth['bearer']:
-                request_url += '{0}scope={1}'.format(query_separator, oauth['bearer']['scope'])
-
-            if DEBUG:
-                print('[debug][auth][request] Refreshing auth token: {0} {1}'.format(method, request_url))
-
-            if args.auth_method == 'GET':
-                try_oauth = requests.get(request_url, auth=auth, headers={'Accept': 'application/json'})
-            else:
-                try_oauth = requests.post(request_url, auth=auth, headers={'Accept': 'application/json'})
-
-            try:
-                oauth_response = ast.literal_eval(try_oauth._content.decode('utf-8'))
-                if DEBUG:
-                    print('[debug][auth][request] Response content: {0}'.format(oauth_response))
-                token = oauth_response['access_token'] if 'access_token' in oauth_response else oauth_response['token']
-            except SyntaxError:
-                print('\n\n[ERROR] couldnt accure token: {0}'.format(try_oauth._content))
-                sys.exit(1)
-
-            if DEBUG:
-                print('[debug][auth] token issued: {0}'.format(token))
-
-            kwargs['headers']['Authorization'] = 'Bearer {0}'.format(token)
+            self._refresh_bearer_auth_token(auth, res.headers)
+            local_kwargs['headers']['Authorization'] = 'Bearer {0}'.format(self._bearer_auth_token)
         else:
-            return (res, kwargs['headers']['Authorization'])
+            return res
 
-        res = requests.request(method, url, **kwargs)
-        if str(res.status_code)[0] == '2':
-            if DEBUG: print("[debug][registry] accepted")
-            return (res, kwargs['headers']['Authorization'])
-
-        if res.status_code == 406:
-            # Try with JSon header
-            old_accept_header = kwargs["headers"]["Accept"]
-            kwargs["headers"]["Accept"] = "application/json"
-            res = requests.request(method, url, **kwargs)
-            kwargs["headers"]["Accept"] = old_accept_header
-            if str(res.status_code)[0] == '2':
-                if DEBUG: print("[debug][registry] accepted")
-                return (res, kwargs['headers']['Authorization'])
-
-        print('\n\n[ERROR] call failed')
-        print('[ERROR][request] url: {0}'.format(res.url))
-        print('[ERROR][request] headers: {0}'.format(res.request.headers))
-        print('[ERROR][request] body: {0}'.format(res.request.body))
-        print('[ERROR][response] status: {0}'.format(res.status_code))
-        print('[ERROR][response] headers: {0}'.format(res.headers))
-        print('[ERROR][response] content: {0}'.format(res.content))
-        sys.exit(1)
+        res = self._request(method, url, **local_kwargs)
+        return res
 
 
 def natural_keys(text):
@@ -170,30 +210,6 @@ def get_error_explanation(context, error_code):
 
     return ''
 
-def get_auth_schemes(r,path):
-    """ Returns list of auth schemes(lowcased) if www-authenticate: header exists
-         returns None if no header found
-         - www-authenticate: basic
-         - www-authenticate: bearer
-    """
-
-    if DEBUG: print("[debug][funcname]: get_auth_schemes()")
-
-    try_oauth = requests.head('{0}{1}'.format(r.hostname,path), verify=not r.no_validate_ssl)
-
-    if DEBUG:
-        print("[debug][funcname]: headers:")
-        print(try_oauth.headers)
-
-    if 'Www-Authenticate' in try_oauth.headers:
-        oauth = www_authenticate.parse(try_oauth.headers['Www-Authenticate'])
-        if DEBUG:
-            print('[debug][docker] Auth schemes found:{0}'.format([m for m in oauth]))
-        return [m.lower() for m in oauth]
-    else:
-        if DEBUG:
-            print('[debug][docker] No Auth schemes found')
-        return []
 
 # class to manipulate registry
 class Registry:
@@ -203,8 +219,6 @@ class Registry:
                "application/vnd.docker.distribution.manifest.v2+json"}
 
     def __init__(self):
-        self.username = None
-        self.password = None
         self.auth_schemes = []
         self.hostname = None
         self.no_validate_ssl = False
@@ -232,7 +246,7 @@ class Registry:
     def _create(host, login, no_validate_ssl, base_path='', digest_method="HEAD"):
         r = Registry()
 
-        (r.username, r.password) = r.parse_login(login)
+        (username, password) = r.parse_login(login)
         if r.last_error is not None:
             print(r.last_error)
             sys.exit(1)
@@ -241,6 +255,8 @@ class Registry:
         r.base_path = base_path + '/'
         r.no_validate_ssl = no_validate_ssl
         r.http = Requests()
+        r.http.username = username
+        r.http.password = password
         r.digest_method = digest_method
         return r
 
@@ -248,27 +264,17 @@ class Registry:
     def create(*args, **kw):
         return Registry._create(*args, **kw)
 
-    def send(self, path, method="GET"):
-        if 'bearer' in self.auth_schemes:
-            (result, self.HEADERS['Authorization']) = self.http.bearer_request(
-                method, "{0}{1}".format(self.hostname, path),
-                auth=(('', '') if self.username in ["", None]
-                    else (self.username, self.password)),
-                headers=self.HEADERS,
-                verify=not self.no_validate_ssl)
-        else:
-            result = self.http.request(
-                method, "{0}{1}".format(self.hostname, path),
-                headers=self.HEADERS,
-                auth=(None if self.username == ""
-                    else (self.username, self.password)),
-                verify=not self.no_validate_ssl)
+    def send(self, path, method="GET", headers=None):
+        if not headers:
+            headers = self.HEADERS
 
-        # except Exception as error:
-        #     print("cannot connect to {0}\nerror {1}".format(
-        #         self.hostname,
-        #         error))
-        #     sys.exit(1)
+        result = self.http.request(
+            method,
+            "{0}{1}".format(self.hostname, path),
+            headers=headers,
+            verify=not self.no_validate_ssl
+        )
+
         if str(result.status_code)[0] == '2':
             self.last_error = None
             return result
@@ -276,15 +282,22 @@ class Registry:
         self.last_error = result.status_code
         return None
 
+    def init_auth_schemes(self):
+        # Updates list of auth schemes for the registry
+        catalog_path = "/v2/{0}_catalog".format(self.base_path)
+        self.http.init_auth_schemes('{0}{1}'.format(self.hostname, catalog_path), verify=not self.no_validate_ssl)
+
     def list_images(self):
-        result = self.send('/v2/{0}_catalog?n=10000'.format(self.base_path))
+        result = self.send('/v2/{0}_catalog?n=10000'.format(self.base_path),
+                           headers={"Accept": "application/json"})
         if result is None:
             return []
 
         return json.loads(result.text)['repositories']
 
     def list_tags(self, image_name):
-        result = self.send("/v2/{0}{1}/tags/list".format(self.base_path, image_name))
+        result = self.send("/v2/{0}{1}/tags/list".format(self.base_path, image_name),
+                           headers={"Accept": "application/json"})
         if result is None:
             return []
 
@@ -393,20 +406,12 @@ class Registry:
             image_config['mediaType'])}
         request_url = "{0}/v2/{1}{2}/blobs/{3}".format(
             self.hostname, self.base_path, image_name, image_config['digest'])
-        if 'bearer' in self.auth_schemes:
-            container_header['Authorization'] = self.HEADERS['Authorization']
-            (response, self.HEADERS['Authorization']) = self.http.bearer_request("GET", request_url,
-                auth=(('', '') if self.username in ["", None]
-                    else (self.username, self.password)),
-                headers=container_header,
-                verify=not self.no_validate_ssl)
-        else:
-            response = self.http.request("GET", request_url,
-                headers=container_header,
-                auth=(None if self.username == ""
-                    else (self.username, self.password)),
-                verify=not self.no_validate_ssl)
-
+        response = self.http.request(
+            "GET",
+            request_url,
+            headers=container_header,
+            verify=not self.no_validate_ssl
+        )
         if str(response.status_code)[0] == '2':
             self.last_error = None
             image_age = json.loads(response.text)
@@ -684,9 +689,13 @@ def get_newer_tags(registry, image_name, hours, tags_list):
             print("  tag {0} not found".format(tag))
             return None
         image_age = registry.get_image_age(image_name, image_config)
+        print("Processing {0} {1}".format(tag, image_age))
         if image_age == []:
             print("  tag {0} timestamp not found".format(tag))
             return None
+        split_age = image_age.rsplit(".", 1)
+        if len(split_age) == 2:
+            image_age = split_age[0] + "." + split_age[1][:6]
         if dt.strptime(image_age[:-4], "%Y-%m-%dT%H:%M:%S.%f") >= dt.now() - timedelta(hours=int(hours)):
             print("  tag is new enough to be kept: {0} timestamp: {1}".format(
                 tag, image_age))
@@ -756,10 +765,7 @@ def main_loop(args):
 
     registry = Registry.create(args.host, args.login, args.no_validate_ssl,
                                args.path, args.digest_method)
-    catalog_path = "/v2/_catalog"
-    if args.path:
-        catalog_path = "/v2/{0}/_catalog".format(args.path)
-    registry.auth_schemes = get_auth_schemes(registry, catalog_path)
+    registry.init_auth_schemes()
 
     if args.delete:
         print('---------------------------------')

@@ -23,6 +23,9 @@ class MockRequests:
         self.return_value.status_code = status_code
         self.return_value.text = text
 
+    def init_auth_schemes(self, url, verify):
+        pass
+
 
 class TestRequestsClass(unittest.TestCase):
 
@@ -48,15 +51,15 @@ class TestCreateMethod(unittest.TestCase):
         r = Registry.create("testhost2", "testlogin:testpass", False)
         self.assertEqual(r.hostname, "testhost2")
         self.assertTrue(isinstance(r.http, Requests))
-        self.assertEqual(r.username, "testlogin")
-        self.assertEqual(r.password, "testpass")
+        self.assertEqual(r.http.username, "testlogin")
+        self.assertEqual(r.http.password, "testpass")
 
     def test_validate_ssl(self):
         r = Registry.create("testhost3", None, True)
         self.assertTrue(isinstance(r.http, Requests))
         self.assertTrue(r.no_validate_ssl)
-        self.assertEqual(r.username, None)
-        self.assertEqual(r.password, None)
+        self.assertEqual(r.http.username, None)
+        self.assertEqual(r.http.password, None)
 
     def test_invalid_login(self):
         with self.assertRaises(SystemExit):
@@ -127,7 +130,6 @@ class TestRegistrySend(unittest.TestCase):
         self.assertEqual(self.registry.last_error, None)
         self.registry.http.request.assert_called_with('GET',
                                                       'http://testdomain.com/test_string',
-                                                      auth=(None, None),
                                                       headers=self.registry.HEADERS,
                                                       verify=True)
 
@@ -138,16 +140,14 @@ class TestRegistrySend(unittest.TestCase):
         self.assertEqual(self.registry.last_error, 400)
 
     def test_login_pass(self):
-        self.registry.username = "test_login"
-        self.registry.password = "test_password"
+        self.registry.http.username = "test_login"
+        self.registry.http.password = "test_password"
         self.registry.http.reset_return_value(200)
         response = self.registry.send('/v2/catalog')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.registry.last_error, None)
         self.registry.http.request.assert_called_with('GET',
                                                       'http://testdomain.com/v2/catalog',
-                                                      auth=("test_login",
-                                                            "test_password"),
                                                       headers=self.registry.HEADERS,
                                                       verify=True)
 
@@ -266,7 +266,6 @@ class TestListDigest(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "HEAD",
             "http://testdomain.com/v2/image1/manifests/0.1.300",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True
         )
@@ -294,7 +293,6 @@ class TestListDigest(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "GET",
             "http://testdomain.com/v2/image1/manifests/0.1.300",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True
         )
@@ -352,7 +350,6 @@ class TestTagConfig(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "GET",
             "http://testdomain.com/v2/image1/manifests/0.1.300",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True)
 
@@ -380,7 +377,6 @@ class TestTagConfig(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "GET",
             "http://testdomain.com/v2/image1/manifests/0.1.300",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True
         )
@@ -421,7 +417,6 @@ class TestImageAge(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "GET",
             "http://testdomain.com/v2/image1/blobs/sha256:8d71dfbf239c0015ad66993d55d3954cee2d52d86f829fdff9ccfb9f23b75aa8",
-            auth=(None, None),
             headers=header,
             verify=True)
 
@@ -439,7 +434,6 @@ class TestImageAge(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "GET",
             "http://testdomain.com/v2/image1/blobs/sha256:8d71dfbf239c0015ad66993d55d3954cee2d52d86f829fdff9ccfb9f23b75aa8",
-            auth=(None, None),
             headers=header,
             verify=True)
 
@@ -471,7 +465,6 @@ class TestListLayers(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "GET",
             "http://testdomain.com/v2/image1/manifests/0.1.300",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True
         )
@@ -495,7 +488,6 @@ class TestListLayers(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "GET",
             "http://testdomain.com/v2/image1/manifests/0.1.300",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True
         )
@@ -511,7 +503,6 @@ class TestListLayers(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "GET",
             "http://testdomain.com/v2/image1/manifests/0.1.300",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True
         )
@@ -546,7 +537,6 @@ class TestDeletion(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "DELETE",
             "http://testdomain.com/v2/image1/manifests/MOCK_DIGEST_HEADER",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True
         )
@@ -560,7 +550,6 @@ class TestDeletion(unittest.TestCase):
         self.registry.http.request.assert_called_with(
             "HEAD",
             "http://testdomain.com/v2/image1/manifests/test_tag",
-            auth=(None, None),
             headers=self.registry.HEADERS,
             verify=True
         )
@@ -741,9 +730,8 @@ class TestKeepImagesLike(unittest.TestCase):
         return r
 
     @patch('registry.Registry.create', mock_create)
-    @patch('registry.get_auth_schemes')  # called in main_loop, turn to noop
     @patch('registry.keep_images_like')
-    def test_main_calls(self, keep_images_like_patched, get_auth_schemes_patched):
+    def test_main_calls(self, keep_images_like_patched):
         # check if keep_images_like is called when passed --images-like
         main_loop(parse_args(('-r', 'localhost:8989', '--images-like', 'me')))
         keep_images_like_patched.assert_called_with(['a', 'b', 'c'], ['me'])
