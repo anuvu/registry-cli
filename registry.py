@@ -627,10 +627,10 @@ def delete_tags(
 def get_tags_like(args_tags_like, tags_list):
     result = set()
     for tag_like in args_tags_like:
-        print("tag like: {0}".format(tag_like))
+        print("  selecting tags like: {0}".format(tag_like))
         for tag in tags_list:
             if re.search(tag_like, tag):
-                print("Adding {0} to tags list".format(tag))
+                print("  tag {0} matches {1}".format(tag, tag_like))
                 result.add(tag)
     return result
 
@@ -659,17 +659,17 @@ def delete_tags_by_age(registry, image_name, dry_run, hours, tags_to_keep):
         image_config = registry.get_tag_config(image_name, tag)
 
         if image_config == []:
-            print("tag not found")
+            print("  tag {0} not found".format(tag))
             continue
 
         image_age = registry.get_image_age(image_name, image_config)
 
         if image_age == []:
-            print("timestamp not found")
+            print("  tag {0} timestamp not found".format(tag))
             continue
 
         if dt.strptime(image_age[:-4], "%Y-%m-%dT%H:%M:%S.%f") < dt.now() - timedelta(hours=int(hours)):
-            print("will be deleted tag: {0} timestamp: {1}".format(
+            print("  tag is old enough to be deleted: {0} timestamp: {1}".format(
                 tag, image_age))
             tags_to_delete.append(tag)
 
@@ -681,18 +681,18 @@ def get_newer_tags(registry, image_name, hours, tags_list):
     def newer(tag):
         image_config = registry.get_tag_config(image_name, tag)
         if image_config == []:
-            print("tag not found")
+            print("  tag {0} not found".format(tag))
             return None
         image_age = registry.get_image_age(image_name, image_config)
         if image_age == []:
-            print("timestamp not found")
+            print("  tag {0} timestamp not found".format(tag))
             return None
         if dt.strptime(image_age[:-4], "%Y-%m-%dT%H:%M:%S.%f") >= dt.now() - timedelta(hours=int(hours)):
-            print("Keeping tag: {0} timestamp: {1}".format(
+            print("  tag is new enough to be kept: {0} timestamp: {1}".format(
                 tag, image_age))
             return tag
         else:
-            print("Will delete tag: {0} timestamp: {1}".format(
+            print("  tag is old enough to be deleted: {0} timestamp: {1}".format(
                 tag, image_age))
             return None
 
@@ -762,7 +762,8 @@ def main_loop(args):
     registry.auth_schemes = get_auth_schemes(registry, catalog_path)
 
     if args.delete:
-        print("Will delete all but {0} last tags".format(keep_last_versions))
+        print('---------------------------------')
+        print("Will keep last {0} tags for all images".format(keep_last_versions))
 
     if args.image is not None:
         image_list = args.image
@@ -821,7 +822,9 @@ def main_loop(args):
                 tags_list_to_keep = [
                     tag for tag in tags_list if tag not in tags_list_to_delete]
                 keep_tags.extend(tags_list_to_keep)
-
+            keep_tags = list(set(keep_tags))  # Eliminate duplicates
+            print("  will keep tags:")
+            pprint.pprint(keep_tags)
             delete_tags(
                 registry, image_name, args.dry_run,
                 tags_list_to_delete, keep_tags)
@@ -829,6 +832,9 @@ def main_loop(args):
         # delete tags by age in hours
         if args.delete_by_hours:
             keep_tags.extend(args.keep_tags)
+            keep_tags = list(set(keep_tags))  # Eliminate duplicates
+            print("  will keep tags:")
+            pprint.pprint(keep_tags)
             delete_tags_by_age(registry, image_name, args.dry_run,
                                args.delete_by_hours, keep_tags)
 
