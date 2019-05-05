@@ -349,8 +349,8 @@ class Registry:
         tag_digest = self.get_tag_digest(image_name, tag)
 
         if tag_digest in tag_digests_to_ignore:
-            print("Digest {0} for tag {1} is referenced by another tag or has already been deleted and will be ignored".format(
-                tag_digest, tag))
+            print("Digest {0} for tag {1} will be ignored: {2}"
+                  .format(tag_digest, tag, tag_digests_to_ignore[tag_digest]))
             return True
 
         if tag_digest is None:
@@ -362,8 +362,11 @@ class Registry:
             delete_result_tag = delete(self, image_name, tag)
             if not delete_result_tag:
                 return False
-
-        tag_digests_to_ignore.append(tag_digest)
+        else:
+            tag_digests_to_ignore.setdefault(tag_digest, {})
+            tag_digests_to_ignore[tag_digest].setdefault("reason", "deleted")
+            tag_digests_to_ignore[tag_digest].setdefault("tags", [])
+            tag_digests_to_ignore[tag_digest]["tags"].append(tag)
 
         print("done")
         return True
@@ -589,7 +592,7 @@ for more detail on garbage collection read here:
 def delete_tags(
         registry, image_name, dry_run, tags_to_delete, tags_to_keep):
 
-    keep_tag_digests = []
+    keep_tag_digests = {}
 
     if tags_to_keep:
         print("Getting digests for tags to keep:")
@@ -603,8 +606,10 @@ def delete_tags(
                 continue
 
             print("Keep digest {0} for tag {1}".format(digest, tag))
-
-            keep_tag_digests.append(digest)
+            keep_tag_digests.setdefault(digest, {})
+            keep_tag_digests[digest]["reason"] = "kept"
+            keep_tag_digests[digest].setdefault("tags", [])
+            keep_tag_digests[digest]["tags"].append(tag)
 
     def delete(tag):
         print("  deleting tag {0}".format(tag))
