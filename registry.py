@@ -346,27 +346,33 @@ class Registry:
             print('would delete tag {0}'.format(tag))
             return False
 
+        # In some cases the tag itself is the name of the manifest
+        # Code below should work in Artifactory, but may not work in dockerhub
+        # as there is no official docker API for deleting tags, but not manifests
+        # See: https://docs.docker.com/registry/spec/api/#deleting-an-image
+        delete_result_tag = delete(self, image_name, tag)
+        if delete_result_tag:
+            print("done")
+            return True
+
+        # Delete on the tag itself has failed, need to delete the digest
         tag_digest = self.get_tag_digest(image_name, tag)
+        if tag_digest is None:
+            return False
 
         if tag_digest in tag_digests_to_ignore:
             print("Digest {0} for tag {1} will be ignored: {2}"
                   .format(tag_digest, tag, tag_digests_to_ignore[tag_digest]))
             return True
 
-        if tag_digest is None:
-            return False
-
         delete_result_digest = delete(self, image_name, tag_digest)
         if not delete_result_digest:
-            # In some cases the tag itself is the name of the manifest
-            delete_result_tag = delete(self, image_name, tag)
-            if not delete_result_tag:
-                return False
-        else:
-            tag_digests_to_ignore.setdefault(tag_digest, {})
-            tag_digests_to_ignore[tag_digest].setdefault("reason", "deleted")
-            tag_digests_to_ignore[tag_digest].setdefault("tags", [])
-            tag_digests_to_ignore[tag_digest]["tags"].append(tag)
+            return False
+
+        tag_digests_to_ignore.setdefault(tag_digest, {})
+        tag_digests_to_ignore[tag_digest].setdefault("reason", "deleted")
+        tag_digests_to_ignore[tag_digest].setdefault("tags", [])
+        tag_digests_to_ignore[tag_digest]["tags"].append(tag)
 
         print("done")
         return True
