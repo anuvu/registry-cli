@@ -5,9 +5,10 @@ import ast
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 import copy
 import json
-import pprint
+import logging
 import base64
 import re
+import pprint
 import sys
 import os
 import argparse
@@ -44,9 +45,6 @@ from multiprocessing.pool import ThreadPool
 # number of image versions to keep
 CONST_KEEP_LAST_VERSIONS = 10
 
-# print debug messages
-DEBUG = False
-
 
 # this class is created for testing
 class Requests:
@@ -58,13 +56,11 @@ class Requests:
         self.password = None
 
     def _refresh_bearer_auth_token(self, auth, headers):
-        global DEBUG
         oauth = www_authenticate.parse(headers['Www-Authenticate'])
         auth_method = args.auth_method.upper()
 
-        if DEBUG:
-            print('[debug][auth][answer] Auth header:')
-            pprint.pprint(oauth['bearer'])
+        logging.debug('[auth][answer] Auth header:')
+        logging.debug(oauth['bearer'])
 
         request_url = '{0}'.format(oauth['bearer']['realm'])
         query_separator = '?'
@@ -74,8 +70,7 @@ class Requests:
         if 'scope' in oauth['bearer']:
             request_url += '{0}scope={1}'.format(query_separator, oauth['bearer']['scope'])
 
-        if DEBUG:
-            print('[debug][auth][request] Refreshing auth token: {0} {1}'.format(auth_method, request_url))
+        logging.debug('[auth][request] Refreshing auth token: {0} {1}'.format(auth_method, request_url))
 
         if auth_method == 'GET':
             try_oauth = self._request("get", request_url, auth=auth, headers={'Accept': 'application/json'})
@@ -84,15 +79,13 @@ class Requests:
 
         try:
             oauth_response = ast.literal_eval(try_oauth._content.decode('utf-8'))
-            if DEBUG:
-                print('[debug][auth][request] Response content: {0}'.format(oauth_response))
+            logging.debug('[auth][request] Response content: {0}'.format(oauth_response))
             token = oauth_response['access_token'] if 'access_token' in oauth_response else oauth_response['token']
         except SyntaxError:
-            print('\n\n[ERROR] could not acquire token: {0}'.format(try_oauth._content))
+            logging.error('could not acquire token: {0}'.format(try_oauth._content))
             sys.exit(1)
 
-        if DEBUG:
-            print('[debug][auth] token issued: {0}'.format(token))
+        logging.debug('[auth] token issued: {0}'.format(token))
 
         self._bearer_auth_token = token
 
@@ -102,23 +95,16 @@ class Requests:
              - www-authenticate: basic
              - www-authenticate: bearer
         """
-        if DEBUG:
-            print("[debug][funcname]: init_auth_schemes()")
-
         try_oauth = requests.head(url, verify=verify)
 
-        if DEBUG:
-            print("[debug][funcname]: headers:")
-            print(try_oauth.headers)
+        logging.debug("[auth][registry] Headers: \n{0}".format(try_oauth.headers))
 
         if 'Www-Authenticate' in try_oauth.headers:
             oauth = www_authenticate.parse(try_oauth.headers['Www-Authenticate'])
-            if DEBUG:
-                print('[debug][auth][registry] Auth schemes found:{0}'.format([m for m in oauth]))
+            logging.debug('[auth][registry] Auth schemes found:{0}'.format([m for m in oauth]))
             self.auth_schemes = [m.lower() for m in oauth]
         else:
-            if DEBUG:
-                print('[debug][auth][registry] No Auth schemes found')
+            logging.debug("[auth][registry] No Auth schemes found'")
             self.auth_schemes = []
 
     def request(self, method, url, **kwargs):
@@ -132,23 +118,21 @@ class Requests:
 
     @staticmethod
     def _request(method, url, **kwargs):
-        global DEBUG
         res = requests.request(method, url, **kwargs)
-        if DEBUG and str(res.status_code)[0] != '2':
-            msg = '\n\n[error][registry] Request failed'
+        if str(res.status_code)[0] != '2':
+            msg = ' \n[error][registry] Request failed'
             msg += '\n[error][registry][request] method {0}: url: {1}'.format(method, res.url)
             msg += '\n[error][registry][request] headers: {0}'.format(res.request.headers)
             msg += '\n[error][registry][request] body: {0}'.format(res.request.body)
             msg += '\n[error][registry][response] status: {0}'.format(res.status_code)
             msg += '\n[error][registry][response] headers: {0}'.format(res.headers)
             msg += '\n[error][registry][response] content: {0}'.format(res.content)
-            print(msg)
-        elif DEBUG:
-            print("[debug][registry] accepted")
+            logging.debug(msg)
+        else:
+            logging.debug("[registry][request] method {0}: url: {1}: accept".format(method, res.url))
         return res
 
     def _bearer_request(self, method, url, auth, **kwargs):
-        global DEBUG
         local_kwargs = copy.deepcopy(kwargs)
 
         if method.upper() == "DELETE":
@@ -191,8 +175,7 @@ def decode_base64(data):
     :returns: The decoded byte string.
 
     """
-    data = data.replace('Bearer ','')
-    # print('[debug] base64 string to decode:\n{0}'.format(data))
+    data = data.replace('Bearer ', '')
     missing_padding = len(data) % 4
     if missing_padding != 0:
         data += b'='* (4 - missing_padding)
@@ -248,7 +231,7 @@ class Registry:
 
         (username, password) = r.parse_login(login)
         if r.last_error is not None:
-            print(r.last_error)
+            logging.error(r.last_error)
             sys.exit(1)
 
         r.hostname = host
@@ -324,8 +307,8 @@ class Registry:
             self.base_path, image_name, tag), method=self.digest_method)
 
         if image_headers is None:
-            print("  tag digest not found: {0}.".format(self.last_error))
-            print(get_error_explanation("get_tag_digest", self.last_error))
+            logging.warning("  tag digest not found: {0}.".format(self.last_error))
+            logging.warning(get_error_explanation("get_tag_digest", self.last_error))
             return None
 
         tag_digest = image_headers.headers['Docker-Content-Digest']
@@ -338,12 +321,12 @@ class Registry:
             url = "/v2/{0}{1}/manifests/{2}".format(registry.base_path, name, manifest)
             delete_result = registry.send(url, method="DELETE")
             if delete_result is None:
-                print("delete failed on {0}, error: {1}".format(url, registry.last_error))
-                print(get_error_explanation("delete_tag", registry.last_error))
+                logging.warning("delete failed on {0}, error: {1}".format(url, registry.last_error))
+                logging.warning(get_error_explanation("delete_tag", registry.last_error))
             return delete_result
 
         if dry_run:
-            print('would delete tag {0}'.format(tag))
+            logging.info("would delete image {0} tag {1}".format(image_name, tag))
             return False
 
         # In some cases the tag itself is the name of the manifest
@@ -352,7 +335,7 @@ class Registry:
         # See: https://docs.docker.com/registry/spec/api/#deleting-an-image
         delete_result_tag = delete(self, image_name, tag)
         if delete_result_tag:
-            print("done")
+            logging.info("done deleting image {0} tag {1}".format(image_name, tag))
             return True
 
         # Delete on the tag itself has failed, need to delete the digest
@@ -361,8 +344,8 @@ class Registry:
             return False
 
         if tag_digest in tag_digests_to_ignore:
-            print("Digest {0} for tag {1} will be ignored: {2}"
-                  .format(tag_digest, tag, tag_digests_to_ignore[tag_digest]))
+            logging.warning("Digest {0} for tag {1} will be ignored: {2}"
+                            .format(tag_digest, tag, tag_digests_to_ignore[tag_digest]))
             return True
 
         delete_result_digest = delete(self, image_name, tag_digest)
@@ -374,7 +357,7 @@ class Registry:
         tag_digests_to_ignore[tag_digest].setdefault("tags", [])
         tag_digests_to_ignore[tag_digest]["tags"].append(tag)
 
-        print("done")
+        logging.info("done deleting image {0} tag {1}".format(image_name, tag))
         return True
 
     def list_tag_layers(self, image_name, tag):
@@ -382,7 +365,7 @@ class Registry:
             self.base_path, image_name, tag))
 
         if layers_result is None:
-            print("error {0}".format(self.last_error))
+            logging.warning("error {0}".format(self.last_error))
             return []
 
         json_result = json.loads(layers_result.text)
@@ -398,13 +381,13 @@ class Registry:
             "/v2/{0}{1}/manifests/{2}".format(self.base_path, image_name, tag))
 
         if config_result is None:
-            print("  tag digest not found: {0}".format(self.last_error))
+            logging.warning("  tag digest not found: {0}".format(self.last_error))
             return []
 
         json_result = json.loads(config_result.text)
         if json_result['schemaVersion'] == 1:
-            print("Docker schemaVersion 1 isn't supported for deleting by age now")
-            sys.exit(1)
+            logging.error("Docker schemaVersion 1 isn't supported for deleting by age now")
+            tag_config = []
         else:
             tag_config = json_result['config']
 
@@ -426,7 +409,7 @@ class Registry:
             image_age = json.loads(response.text)
             return image_age['created']
         else:
-            print(" blob not found: {0}".format(self.last_error))
+            logging.info(" blob not found: {0}".format(self.last_error))
             self.last_error = response.status_code
             return []
 
@@ -601,24 +584,24 @@ def delete_tags(
     keep_tag_digests = {}
 
     if tags_to_keep:
-        print("Getting digests for tags to keep:")
+        logging.info("Getting digests for tags to keep:")
         for tag in tags_to_keep:
 
-            print("Getting digest for tag {0}".format(tag))
+            logging.debug("Getting digest for tag {0}".format(tag))
             digest = registry.get_tag_digest(image_name, tag)
             if digest is None:
-                print("Tag {0} does not exist for image {1}. Ignore here.".format(
-                    tag, image_name))
+                logging.info("Tag {0} does not exist for image {1}. Ignore here."
+                             .format(tag, image_name))
                 continue
 
-            print("Keep digest {0} for tag {1}".format(digest, tag))
+            logging.info("Keep digest {0} for tag {1}".format(digest, tag))
             keep_tag_digests.setdefault(digest, {})
             keep_tag_digests[digest]["reason"] = "kept"
             keep_tag_digests[digest].setdefault("tags", [])
             keep_tag_digests[digest]["tags"].append(tag)
 
     def delete(tag):
-        print("  deleting tag {0}".format(tag))
+        logging.info("  deleting tag {0}".format(tag))
         registry.delete_tag(image_name, tag, dry_run, keep_tag_digests)
 
     p = ThreadPool(4)
@@ -643,10 +626,10 @@ def delete_tags(
 def get_tags_like(args_tags_like, tags_list):
     result = set()
     for tag_like in args_tags_like:
-        print("  selecting tags like: {0}".format(tag_like))
+        logging.info("  selecting tags like: {0}".format(tag_like))
         for tag in tags_list:
             if re.search(tag_like, tag):
-                print("  tag {0} matches {1}".format(tag, tag_like))
+                logging.info("  tag {0} matches {1}".format(tag, tag_like))
                 result.add(tag)
     return result
 
@@ -670,26 +653,25 @@ def get_tags(all_tags_list, image_name, tags_like):
 def delete_tags_by_age(registry, image_name, dry_run, hours, tags_to_keep):
     image_tags = registry.list_tags(image_name)
     tags_to_delete = []
-    print('---------------------------------')
+    logging.info('---------------------------------')
     for tag in image_tags:
         image_config = registry.get_tag_config(image_name, tag)
 
         if image_config == []:
-            print("  tag {0} not found".format(tag))
+            logging.warning("  tag {0} config not found".format(tag))
             continue
 
         image_age = registry.get_image_age(image_name, image_config)
 
         if image_age == []:
-            print("  tag {0} timestamp not found".format(tag))
+            logging.warning("  tag {0} timestamp not found".format(tag))
             continue
 
         if dt.strptime(image_age[:-4], "%Y-%m-%dT%H:%M:%S.%f") < dt.now() - timedelta(hours=int(hours)):
-            print("  tag is old enough to be deleted: {0} timestamp: {1}".format(
-                tag, image_age))
+            logging.info("  tag is old enough to be deleted: {0} timestamp: {1}".format(tag, image_age))
             tags_to_delete.append(tag)
 
-    print('------------deleting-------------')
+    logging.info('------------deleting-------------')
     delete_tags(registry, image_name, dry_run, tags_to_delete, tags_to_keep)
 
 
@@ -697,26 +679,24 @@ def get_newer_tags(registry, image_name, hours, tags_list):
     def newer(tag):
         image_config = registry.get_tag_config(image_name, tag)
         if image_config == []:
-            print("  tag {0} not found".format(tag))
+            logging.warning("  tag {0} not found".format(tag))
             return None
         image_age = registry.get_image_age(image_name, image_config)
-        print("Processing {0} {1}".format(tag, image_age))
+        logging.info("Processing {0} {1}".format(tag, image_age))
         if image_age == []:
-            print("  tag {0} timestamp not found".format(tag))
+            logging.warning("  tag {0} timestamp not found".format(tag))
             return None
         split_age = image_age.rsplit(".", 1)
         if len(split_age) == 2:
             image_age = split_age[0] + "." + split_age[1][:6]
         if dt.strptime(image_age[:-4], "%Y-%m-%dT%H:%M:%S.%f") >= dt.now() - timedelta(hours=int(hours)):
-            print("  tag is new enough to be kept: {0} timestamp: {1}".format(
-                tag, image_age))
+            logging.info("  tag is new enough to be kept: {0} timestamp: {1}".format(tag, image_age))
             return tag
         else:
-            print("  tag is old enough to be deleted: {0} timestamp: {1}".format(
-                tag, image_age))
+            logging.info("  tag is old enough to be deleted: {0} timestamp: {1}".format(tag, image_age))
             return None
 
-    print('---------------------------------')
+    logging.info('---------------------------------')
     p = ThreadPool(4)
     result = list(x for x in p.map(newer, tags_list) if x)
     p.close()
@@ -738,9 +718,17 @@ def keep_images_like(image_list, regexp_list):
 
 
 def main_loop(args):
-    global DEBUG
 
-    DEBUG = True if args.debug else False
+    if args.debug:
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.INFO
+
+    logging.basicConfig(format='%(asctime)s %(levelname)-10s %(message)s',
+                        datefmt='%d-%b-%y %H:%M:%S',
+                        level=log_level)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
     keep_last_versions = int(args.num)
 
@@ -749,7 +737,7 @@ def main_loop(args):
 
     if args.read_password:
         if args.login is None:
-            print("Please provide -l when using -w")
+            logging.error("Please provide -l when using -w")
             sys.exit(1)
 
         if ':' in args.login:
@@ -766,7 +754,7 @@ def main_loop(args):
             password = sys.stdin.read()
 
             if len(password) == 0:
-                print("Password was not provided")
+                logging.error("Password was not provided")
                 sys.exit(1)
 
             if password[-(len(os.linesep)):] == os.linesep:
@@ -779,8 +767,8 @@ def main_loop(args):
     registry.init_auth_schemes()
 
     if args.delete:
-        print('---------------------------------')
-        print("Will keep last {0} tags for all images".format(keep_last_versions))
+        logging.info("---------------------------------")
+        logging.info("Will keep last {0} tags for all images".format(keep_last_versions))
 
     if args.image is not None:
         image_list = args.image
@@ -792,28 +780,28 @@ def main_loop(args):
     # loop through registry's images
     # or through the ones given in command line
     for image_name in image_list:
-        print("---------------------------------")
-        print("Image: {0}".format(image_name))
+        logging.info("---------------------------------")
+        logging.info("Image: {0}".format(image_name))
 
         all_tags_list = registry.list_tags(image_name)
 
         if not all_tags_list:
-            print("  no tags!")
+            logging.info("  no tags!")
             continue
 
         tags_list = get_tags(all_tags_list, image_name, args.tags_like)
 
         # print(tags and optionally layers
         for tag in tags_list:
-            print("  tag: {0}".format(tag))
+            logging.info("  tag: {0}".format(tag))
             if args.layers:
                 for layer in registry.list_tag_layers(image_name, tag):
                     if 'size' in layer:
-                        print("    layer: {0}, size: {1}".format(
-                            layer['digest'], layer['size']))
+                        logging.info("    layer: {0}, size: {1}"
+                                     .format(layer['digest'], layer['size']))
                     else:
-                        print("    layer: {0}".format(
-                            layer['blobSum']))
+                        logging.info("    layer: {0}"
+                                     .format(layer['blobSum']))
 
         # add tags to "tags_to_keep" list, if we have regexp "tags_to_keep"
         # entries or a number of hours for "keep_by_hours":
@@ -840,8 +828,8 @@ def main_loop(args):
                     tag for tag in tags_list if tag not in tags_list_to_delete]
                 keep_tags.extend(tags_list_to_keep)
             keep_tags = list(set(keep_tags))  # Eliminate duplicates
-            print("  will keep tags:")
-            pprint.pprint(keep_tags)
+            logging.info("  Will keep tags:")
+            logging.info("\n" + pprint.pformat(keep_tags))
             delete_tags(
                 registry, image_name, args.dry_run,
                 tags_list_to_delete, keep_tags)
@@ -850,8 +838,8 @@ def main_loop(args):
         if args.delete_by_hours:
             keep_tags.extend(args.keep_tags)
             keep_tags = list(set(keep_tags))  # Eliminate duplicates
-            print("  will keep tags:")
-            pprint.pprint(keep_tags)
+            logging.info("  Will keep tags:")
+            logging.info("\n" + pprint.pformat(keep_tags))
             delete_tags_by_age(registry, image_name, args.dry_run,
                                args.delete_by_hours, keep_tags)
 
@@ -860,5 +848,5 @@ if __name__ == "__main__":
     try:
         main_loop(args)
     except KeyboardInterrupt:
-        print("Ctrl-C pressed, quitting")
+        logging.info("Ctrl-C pressed, quitting")
         sys.exit(1)
