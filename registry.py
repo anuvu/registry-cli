@@ -13,7 +13,9 @@ import sys
 import os
 import argparse
 import www_authenticate
+import ciso8601
 import _strptime
+import dateutil.tz
 from datetime import timedelta, datetime as dt
 from getpass import getpass
 from multiprocessing.pool import ThreadPool
@@ -667,8 +669,20 @@ def delete_tags_by_age(registry, image_name, dry_run, hours, tags_to_keep):
             logging.warning("  tag {0} timestamp not found".format(tag))
             continue
 
-        if dt.strptime(image_age[:-4], "%Y-%m-%dT%H:%M:%S.%f") < dt.now() - timedelta(hours=int(hours)):
-            logging.info("  tag is old enough to be deleted: {0} timestamp: {1}".format(tag, image_age))
+        # Need to parse several different date formats, rely on ciso8601 for this
+        # Examples of known formats found in dockerhub/artifactory:
+        #   2019-01-18T08:27:13.423155
+        #   2019-01-18T08:27:13.423155Z
+        #   2019-01-18T08:27:13.423156538Z
+        #   1970-01-01T00:00:00Z
+        parsed_image_age = ciso8601.parse_datetime(image_age)
+        # Make sure the timezone is part of parsed_image_age, if not, use local timezone
+        if parsed_image_age.tzinfo is None or parsed_image_age.tzinfo.utcoffset(parsed_image_age) is None:
+            parsed_image_age = parsed_image_age.replace(tzinfo=dateutil.tz.tzlocal())
+        # Check tag date
+        if parsed_image_age < dt.now(tz=dateutil.tz.tzlocal()) - timedelta(hours=int(hours)):
+            logging.info("  tag is old enough to be deleted: {0} timestamp: {1} parsed timestamp: {2}"
+                         .format(tag, image_age, parsed_image_age))
             tags_to_delete.append(tag)
 
     logging.info('------------deleting-------------')
@@ -686,14 +700,24 @@ def get_newer_tags(registry, image_name, hours, tags_list):
         if image_age == []:
             logging.warning("  tag {0} timestamp not found".format(tag))
             return None
-        split_age = image_age.rsplit(".", 1)
-        if len(split_age) == 2:
-            image_age = split_age[0] + "." + split_age[1][:6]
-        if dt.strptime(image_age[:-4], "%Y-%m-%dT%H:%M:%S.%f") >= dt.now() - timedelta(hours=int(hours)):
-            logging.info("  tag is new enough to be kept: {0} timestamp: {1}".format(tag, image_age))
+        # Need to parse several different date formats, rely on ciso8601 for this
+        # Examples of known formats found in dockerhub/artifactory:
+        #   2019-01-18T08:27:13.423155
+        #   2019-01-18T08:27:13.423155Z
+        #   2019-01-18T08:27:13.423156538Z
+        #   1970-01-01T00:00:00Z
+        parsed_image_age = ciso8601.parse_datetime(image_age)
+        # Make sure the timezone is part of parsed_image_age, if not, use local timezone
+        if parsed_image_age.tzinfo is None or parsed_image_age.tzinfo.utcoffset(parsed_image_age) is None:
+            parsed_image_age = parsed_image_age.replace(tzinfo=dateutil.tz.tzlocal())
+        # Check tag date
+        if parsed_image_age >= dt.now(tz=dateutil.tz.tzlocal()) - timedelta(hours=int(hours)):
+            logging.info("  tag is new enough to be kept: {0} timestamp: {1} parsed timestamp: {2}"
+                         .format(tag, image_age, parsed_image_age))
             return tag
         else:
-            logging.info("  tag is old enough to be deleted: {0} timestamp: {1}".format(tag, image_age))
+            logging.info("  tag is old enough to be deleted: {0} timestamp: {1} parsed timestamp: {2}"
+                         .format(tag, image_age, parsed_image_age))
             return None
 
     logging.info('---------------------------------')
